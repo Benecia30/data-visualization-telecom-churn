@@ -63,7 +63,7 @@ library(tidyr)
 We first perform data pre-processing steps to clean the data:
 
 ```{r}
-data_tele <- read.csv("cleaned_customer_data.csv")
+data_tele <- read.csv("../data/cleaned_customer_data.csv")
 str(data_tele)
 summary(data_tele)
 
@@ -87,13 +87,13 @@ df_clean$SeniorCitizen <- ifelse(df_clean$SeniorCitizen == 1, "Yes", "No")
 table(df_clean$SeniorCitizen)
 
 # Save cleaned data frame to csv
-write.csv(df_clean, "cleaned_customer_data.csv", row.names = FALSE)
+write.csv(df_clean, "../data/cleaned_customer_data.csv", row.names = FALSE)
 
 ```
 
 
 ```{r}
-data <- read.csv("cleaned_customer_data.csv")
+data <- read.csv("../data/cleaned_customer_data.csv")
 ```
 
 &nbsp;
