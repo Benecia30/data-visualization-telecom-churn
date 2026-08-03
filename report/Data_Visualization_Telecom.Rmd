@@ -1,0 +1,1323 @@
+---
+title: "Data Visualisation - Customer Behaviour in Telecom"
+author: "Our Data Vision"
+date: "2025-07-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+In this project, we explore a Telco customer dataset with the goal of uncovering patterns and factors associated with customer churn. The dataset includes various demographic and service-related variables such as:
+
+- **Demographics**: Gender, Senior Citizen status, Partner, Dependents  
+- **Service Subscriptions**: Internet service, Online Security, Tech Support, Streaming services, etc.  
+- **Account Information**: Contract type, Payment method, Tenure, Monthly and Total charges  
+- **Churn**: Whether the customer has left the company
+
+The analysis begins with data cleaning and exploration, followed by visualizations to explore 5 research questions:
+
+1. **How do customer demographics and contract types influence spending, and does this vary by churn behavior?**  
+   This question explores whether different groups of customers—based on gender, age, and family status—spend differently, and how contract length plays a role, especially when comparing churned and non-churned customers.
+
+2. **How does customer loyalty (tenure) vary across contract and internet service types, and how does this relate to churn?**  
+   Here, we examine how long customers tend to stay based on the type of contract and internet service they use, and whether that influences their likelihood of leaving.
+
+3. **Does having OnlineSecurity and TechSupport affect how long customers stay and how much they spend? And does this effect change depending on the type of contract they have?**  
+   This focuses on whether access to key support services encourages customers to stay longer or spend more, and whether this relationship is moderated by the type of contract (month-to-month, one-year, two-year).
+
+4. **What are the primary factors (e.g., combinations of services) that contribute most to high MonthlyCharges, and how do these factors relate to tenure and Churn behavior? Can we identify "premium" customer segments and their churn characteristics?**  
+   We investigate service bundling patterns (e.g., streaming, security, support services) to see if certain combinations correlate with higher bills and longer/shorter customer lifespans.
+
+5. **Can we identify distinct customer segments based on service usage patterns, and how do these segments differ in churn, loyalty, and spending?**  
+   Finally, we aim to use clustering or visual summaries to detect meaningful customer segments and compare their behavior in terms of retention and value to the company.
+   
+&nbsp;
+
+---
+
+&nbsp;
+   
+   
+```{r}
+install.packages("plotly", repos = "https://cloud.r-project.org")
+
+```
+
+### Libraries
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(stringr)
+library(plotly)
+library(scales)
+library(cluster)
+library(caret)
+library(tidyr)
+```
+
+### Data Preprocessing
+
+We first perform data pre-processing steps to clean the data:
+
+```{r}
+data_tele <- read.csv("cleaned_customer_data.csv")
+str(data_tele)
+summary(data_tele)
+
+# only Total Charges has NA values
+sum(is.na(data_tele$TotalCharges))    # only 11 values, hence we can remove them
+
+df_clean <- data_tele[!is.na(data_tele$TotalCharges), ]
+
+# cleaned df
+colSums(is.na(df_clean))
+
+# unique values for each variable (column)
+sapply(df_clean, function(col) length(unique(col)))
+
+# checking for white space only fields (there are none)
+sum(df_clean$TotalCharges == " ", na.rm = TRUE)
+
+# Convert SeniorCitizen 0/1 to "No"/"Yes"
+df_clean$SeniorCitizen <- ifelse(df_clean$SeniorCitizen == 1, "Yes", "No")
+
+table(df_clean$SeniorCitizen)
+
+# Save cleaned data frame to csv
+write.csv(df_clean, "cleaned_customer_data.csv", row.names = FALSE)
+
+```
+
+
+```{r}
+data <- read.csv("cleaned_customer_data.csv")
+```
+
+&nbsp;
+
+---
+
+&nbsp;
+
+# Introductory Data Visualizations
+
+We first try to visualize the data:
+
+#### 1) Bar Plots for Categorical Variables
+
+- We first plot bar plots to visualize the categorical variables:
+
+```{r}
+# Bar plot for churn
+ggplot(data, aes(x = Churn)) +
+  geom_bar(fill = "#F8766D") +
+  labs(title = "Customer Churn Distribution")
+```
+
+
+
+```{r}
+cat_vars <- c("gender", "SeniorCitizen", "Partner", "Dependents", "PhoneService",
+              "MultipleLines", "InternetService", "OnlineSecurity", "OnlineBackup",
+              "DeviceProtection", "TechSupport", "StreamingTV", "StreamingMovies",
+              "Contract", "PaperlessBilling", "PaymentMethod")
+
+batch_size <- 6
+num_batches <- ceiling(length(cat_vars) / batch_size)
+num_batches <- min(num_batches, 3)  # max 3 batches
+
+for (i in 1:num_batches) {
+  start_idx <- (i - 1) * batch_size + 1
+  end_idx <- min(i * batch_size, length(cat_vars))
+  vars_batch <- cat_vars[start_idx:end_idx]
+  
+  par(mfrow = c(3, 2), mar = c(4, 6, 2, 1))
+  
+  for (var in vars_batch) {
+    counts <- table(data[[var]])
+    barplot(counts,
+            main = paste("Distribution of", var),
+            col = "skyblue")
+  }
+  
+  par(mfrow = c(1, 1))
+}
+
+```
+
+#### 2) Histograms for Numerical Variables
+
+We now visualize the numeric variables using histograms, to visualize their distributions and skewness.
+
+```{r}
+ggplot(data, aes(x = tenure)) +
+  geom_histogram(bins = 30, fill = "#FFB74D") +
+  labs(title = "Distribution of Tenure (in months)")
+
+```
+
+**Observations:**
+
+- We see a U-shaped ditribution for **tenure**:
+  - First peak probably indicates customers who churn early or new customers.
+  - Peak toward end indicates loyal long-term customers
+  - The dip in the middle may represent those who churn gradually or drop off over time.
+
+
+
+```{r}
+ggplot(data, aes(x = MonthlyCharges)) +
+  geom_histogram(bins = 30, fill = "#7986CB") +
+  labs(title = "Distribution of Monthly Charges")
+```
+
+**Observations:**
+
+- We observe that **MonthlyCharges** follows a bimodal distribution:
+  - The first peak is narrower and appears around $20–$22.
+  - The second peak is broader and spans roughly from $40 to $125.
+  
+- This could indicate the existence of two customer groups:
+  - One customer group likely to have minimal service subscriptions (e.g., no internet or limited features)
+  - And another group may be premium or bundled service users with higher monthly bills
+
+
+```{r}
+
+ggplot(data, aes(x = TotalCharges)) +
+  geom_histogram(bins = 30, fill = "#4DB6AC") +
+  labs(title = "Distribution of Total Charges")
+
+```
+
+**Observations:**
+
+- The histogram of **TotalCharges** shows a long tailed distribution (right-skewed)
+  - **TotalCharges** is the sum of all monthly bills a customer has paid.
+  - This probably indicates that that are many new customers, but with lower tenure (high frequency near 0)
+    - i.e, many customers probably churn within the first few months (hence TotalCharges do not accumulate)
+  - This also shows that long-term loyal customers are fewer
+    - Customers who stay for longer and  accumulate high TotalCharges are fewer, forming the long tail.
+    
+    
+
+#### 3) Boxplots to Spot Outliers
+
+We now plot box plots to highlight any extreme values present in any of the variables:
+
+```{r}
+
+ggplot(data, aes(x = Churn, y = MonthlyCharges, fill = Churn)) +
+  geom_boxplot(alpha = 0.5) +
+  labs(title = "Monthly Charges by Churn Status")
+
+```
+
+- From here we can see that:
+  - Customers who did not churn had a wider spread in their monthly charges. Their charges range from low to high, and the median is relatively lower.
+  - Customers who churned have higher monthly charges overall, with a higher median than the non-churned group.
+    - The boxplot for churned customers is narrower, suggesting that they are more concentrated around higher charge values.
+    
+- This implies that customers paying higher monthly charges may be more likely to churn.
+
+
+```{r}
+
+ggplot(data, aes(x = Contract, y = TotalCharges, fill = Contract)) +
+  geom_boxplot(alpha = 0.5) +
+  labs(title = "Total Charges by Contract Type")
+
+```
+
+- Here we see that customers with month-to-month contracts have the lowest median total charges, followed by one year, then two year contract types.
+
+- We can see many outliers on the high end in the month-to-month plan:
+  - This could be because they have been with the company for a long time (long tenure), so even if they pay monthly, total charges add up.
+  - Or they might have high monthly charges (e.g., expensive services), so their total charges get high quickly even with fewer months.
+
+
+Now we can begin with the research questions.
+
+
+&nbsp;
+
+---
+
+&nbsp;
+
+
+# Question 1:
+
+**How do customer demographics and contract types influence spending, and does this vary by churn behavior?**
+
+### What is needed:
+- Which groups spend more money?
+- Does contract type change spending a lot?
+- Do customers who leave pay more or less compared to those who stay?
+
+```{r}
+telco <- data
+
+# Convert TotalCharges to numeric
+telco$TotalCharges <- as.numeric(as.character(telco$TotalCharges))
+# Convert to factors
+factor_cols <- c("gender", "SeniorCitizen", "Partner", "Dependents", "Contract", "Churn")
+telco[factor_cols] <- lapply(telco[factor_cols], as.factor)
+
+str(telco)
+summary(telco)
+
+```
+
+
+### Visualizations
+
+**Plots that compare spending (MonthlyCharges & TotalCharges) across:**
+
+- **Demographics**  
+- **Contract types**  
+- **Churn behavior**
+
+**A. Boxplots**  
+*Show distribution of spending by Contract and Churn.*
+
+
+```{r}
+ggplot(telco, aes(x = Contract, y = MonthlyCharges, fill = Churn)) +
+  geom_boxplot() +
+  facet_wrap(~ SeniorCitizen) +
+  labs(title = "Monthly Charges by Contract, Churn & Senior Status")
+```
+
+#### Conclusion: Boxplots: Monthly Charges by Contract, Churn & Senior Status
+- Month-to-month customers have **higher and more spread out charges**, especially those who **left (Churn = Yes)**.
+- One-year and two-year contracts show **lower and more stable spending**.
+- Senior citizens often spend **a bit less**, but churn still affects spending strongly.
+
+
+**B. Density Plots**
+*how MonthlyCharges are distributed for Churn = Yes vs No..*
+
+```{r}
+ggplot(telco, aes(x = MonthlyCharges, fill = Churn)) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Monthly Charges Distribution by Churn")
+```
+
+#### Conclusion
+
+
+##### Density Plot: Monthly Charges Distribution by Churn
+  - The curve for **Churn = Yes** is shifted to the right, meaning customers who leave often have **higher monthly charges**.
+  - Customers who stayed usually have **lower and more stable charges**.
+  
+  
+
+**C. Violin Plots**
+
+   Show spending spread by gender and churn.
+
+```{r}
+ggplot(telco, aes(x = gender, y = TotalCharges, fill = Churn)) +
+  geom_violin(trim = FALSE) +
+  labs(title = "Total Charges Distribution by Gender and Churn")
+```
+
+#### Conclusion
+
+##### Violin Plots: Total Charges by Gender and Churn
+
+**Churned customers (blue) spend less**
+For both men and women, people who left the company had lower total charges.
+This likely means they didn’t stay long or didn’t use many services.
+
+**Non-churned customers (red) spend more**
+Customers who stayed have higher total charges, probably because they were with the company longer and used more services.
+
+**Gender doesn’t make much difference**
+Shapes of the violins are very similar between Male and Female.
+Gender does not significantly affect TotalCharges or churn behavior.
+
+
+**D. Grouped Bar Chart**
+Show average MonthlyCharges by Partner/Dependents and Churn.
+
+```{r}
+
+avg_charges <- telco %>%
+  group_by(Partner, Dependents, Churn) %>%
+  summarise(AverageMonthlyCharges = mean(MonthlyCharges), .groups = "drop")
+
+ggplot(avg_charges, aes(x = Partner, y = AverageMonthlyCharges, fill = Churn)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~ Dependents) +
+  labs(title = "Average Monthly Charges by Partner, Dependents, and Churn")
+
+```
+
+#### Conclusion
+
+##### Grouped Bar Chart: Average Monthly Charges by Partner, Dependents, and Churn
+Customers with a **partner** and **no dependents** leave the company and spend more money
+Customers **without a partner** but **with kids** (dependents) stay with the company spend less money among all groups.
+
+### Overall Conclusion
+
+- **Who spends more?** Customers with **month-to-month contracts**, **partner**, and **no dependents**.
+- **Does contract type matter?** Yes. **Month-to-month customers** spend more and are more likely to leave.
+- **Does churn change spending?** Yes. **Churned customers** pay more per month but **less in total** because they leave sooner.
+
+&nbsp;
+
+---
+
+&nbsp;
+
+
+# Question 2:
+
+**How does customer loyalty (tenure) vary across contract and internet service types, and how does this relate to churn?**
+
+```{r}
+# Box Plot for Tenure by Contract Type and Internet Service
+ggplot(data, aes(x = Contract, y = tenure, fill = InternetService)) +
+  geom_boxplot() +
+  labs(title = "Tenure by Contract Type and Internet Service",
+       x = "Contract Type", y = "Tenure (months)") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set2")
+
+```
+
+#### Conclusion
+
+**Tenure by Contract Type**
+1. **Longer contracts = longer tenure:** As contract duration increases (Month-to-month → One year → Two year), median customer tenure rises significantly.
+2. **Two-year contracts show highest loyalty:** These contracts have the highest median and upper quartile, indicating the strongest customer loyalty.
+3. **Month-to-month contracts = low tenure:** These have the shortest tenures with low medians and wide spreads, suggesting less customer commitment.
+
+---
+
+**Internet Service by Contract Type**
+1. **Month-to-month:** “No Internet Service” often has the lowest median tenure, meaning these customers churn the fastest.
+2. **One-year contracts:** “Fiber optic” has the highest median tenure, followed by “DSL,” and then “No Internet Service.”
+3. **Two-year contracts:** “Fiber optic” and “DSL” both have very high and comparable median tenures, often close to the maximum.
+
+
+
+
+
+```{r}
+# Calculate churn rate
+churn_rates <- data %>%
+  group_by(Contract, InternetService) %>%
+  summarise(ChurnRate = mean(Churn == "Yes"), .groups = 'drop')
+
+# Bar Plot Churn Rate by Contract Type and Internet Service
+ggplot(churn_rates, aes(x = Contract, y = ChurnRate, fill = InternetService)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8)) +
+  geom_text(aes(label = scales::percent(ChurnRate, accuracy = 1)),
+            position = position_dodge(width = 0.8), vjust = -0.5, size = 3.5) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  labs(title = "Churn Rate by Contract Type and Internet Service",
+       x = "Contract Type", y = "Churn Rate", fill = "Internet Service") +
+  theme_minimal()
+```
+
+
+#### Conclusion
+
+1. **Contract Type is Key to Churn:** Month-to-month contracts have significantly higher churn rates than one-year or two-year contracts.
+2. **Two-Year Contracts Have Lowest Churn:** These show exceptionally low churn rates across all internet service types.
+3. **Fiber Optic (Month-to-month) is High Risk:** Customers with Fiber Optic on a month-to-month contract have the highest churn rate at 55%.
+4. **DSL Generally Lower Churn:** DSL service tends to have lower churn rates compared to Fiber Optic within the same contract type, especially for month-to-month.
+
+
+```{r}
+#Heat Map
+ggplot(churn_rates, aes(x = InternetService, y = Contract, fill = ChurnRate)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = scales::percent(ChurnRate, accuracy = 1)), size = 4) +
+  scale_fill_gradient(low = "white", high = "red") +
+  labs(title = "Churn Rate by Contract Type and Internet Service",
+       x = "Internet Service", y = "Contract Type", fill = "Churn Rate") +
+  theme_minimal()
+```
+```{r}
+#Histogram
+ggplot(data, aes(x = tenure, fill = Churn)) +
+  geom_histogram(position = "identity", alpha = 0.6, bins = 30) +
+  facet_grid(Contract ~ InternetService) +
+  labs(title = "Tenure Distribution by Churn, Contract, and Internet Service",
+       x = "Tenure (months)", y = "Count") +
+  scale_fill_manual(values = c("Yes" = "red", "No" = "green")) +
+  theme_minimal()
+```
+
+#### Conclusion
+
+1. **Churners (red) primarily churn early:** Their tenure distributions are heavily concentrated at low months across all contract types and internet services.
+
+2. **Non-churners (green) exhibit longer tenures:** Their distributions show customers staying for much longer periods, especially with one-year and two-year contracts.
+
+3. **Longer contracts lead to longer retention:** The number of non-churning customers (green) with high tenures significantly increases as contract duration goes from month-to-month to two-year.
+
+4. **Month-to-month Fiber Optic is a high-risk group:** This segment shows a particularly high volume of early churners (red peak at low tenure).
+
+```{r}
+# Hypothesis Testing Framework - Model 1 
+
+#Null Hypothesis (H₀):
+#Tenure, Contract Type, and Internet Service do not have any significant effect on customer churn.
+
+#Alternative Hypothesis (H₁):
+#At least one of the predictors (tenure, contract, or internet service) has a significant effect on customer churn
+
+data$Churn <- as.factor(data$Churn)
+levels(data$Churn)
+model <- glm(Churn ~ tenure + Contract + InternetService, data = data, family = "binomial")
+summary(model)
+
+```
+
+#### Conclusion 
+
+1. **Tenure Effect**
+
+  The longer a customer stays (higher tenure), the less likely they are to churn.Each additional month reduces the log-odds of churn by 0.031.
+
+2. **Contract Type Effect**
+
+  Customers with 1-year contracts are less likely to churn than those with month-to-month plans.*
+
+  Customers with 2-year contracts are even less likely to churn — showing that long-term contracts promote loyalty.*
+
+3. **Internet Service Effect**
+
+   Customers with Fiber Optic are more likely to churn than DSL users — possibly due to higher    expectations, service disruptions, or pricing.*
+
+   Customers with No internet are less likely to churn — likely due to lower service usage or basic plans.
+
+
+
+### Overall Conclusion
+ 
+ 1. **Churners mostly leave early, within the first few months.**
+
+ 2. **Customers with longer tenure tend to stay and not churn.**
+
+ 3. **One-year and two-year contracts significantly reduce churn compared to month-to-month plans.**
+ 
+ 4. **Fiber optic users on month-to-month contracts have the highest churn risk.**
+ 
+&nbsp;
+
+---
+
+&nbsp;
+
+# Question 3: 
+
+**Does having OnlineSecurity and TechSupport affect how long customers stay and how much they spend? And does this effect change depending on the type of contract they have?**
+
+```{r}
+# Tenure by OnlineSecurity
+ggplot(data, aes(x = OnlineSecurity, y = tenure, fill = OnlineSecurity)) +
+  geom_boxplot(alpha = 0.5) +
+  labs(title = "Tenure by Online Security Status") +
+  theme_minimal()
+
+```
+
+
+#### Conclusion 
+- From this graph we can see that the customers with the Online Security service had the longest tenures.
+- This is followed by the customers with no internet service (probably because they have subscribed to a different service package, such as phone-only), and hence stay longer.
+- The customers with the lowest tenure overall, are the ones that lack of Online Security, therefore this may be associated with shorter customer retention.
+
+
+```{r}
+# Tenure by TechSupport
+ggplot(data, aes(x = TechSupport, y = tenure, fill = TechSupport)) +
+  geom_boxplot(alpha = 0.5) +
+  labs(title = "Tenure by Tech Support Status") +
+  theme_minimal()
+```
+
+
+#### Conclusion 
+- An almost identical pattern is observed with Tech support:
+  - Customers with tech support tend to stay the longest (longer retention)
+  - "No internet service"- These customers again show moderately high tenure, similar to the Online Security plot. This might represent a different segment (e.g., phone service only), but still with good retention.
+  - And No Tech support shows lowest tenure again
+  
+- This trend reinforces the idea that lack of support services may be associated with earlier churn or shorter contracts.
+
+
+```{r}
+# TotalCharges by OnlineSecurity
+ggplot(data, aes(x = OnlineSecurity, y = TotalCharges, fill = OnlineSecurity)) +
+  geom_boxplot(alpha = 0.5) +
+  labs(title = "Total Charges by Online Security Status") +
+  theme_minimal()
+
+# TotalCharges by TechSupport
+ggplot(data, aes(x = TechSupport, y = TotalCharges, fill = TechSupport)) +
+  geom_boxplot(alpha = 0.5) +
+  labs(title = "Total Charges by Tech Support Status") +
+  theme_minimal()
+
+```
+
+
+#### Conclusion 
+- We see that both the above graphs have almost identical boxplots:
+  - Customers with both services (Online Security and Tech Support) accumulated higher charges, as they pay for additional costs for the extra services as expected.
+  - Those with no internet service at all naturally have lower costs as they don#t have to pay for internet and extra services.
+  - And those with no service charges have lower charges but more than no internet service customers as they still do pay for the internet service, but not for extra services.
+  
+  
+### Faceted Plots (by contract type)
+
+```{r}
+# Tenure by OnlineSecurity and Contract
+ggplot(data, aes(x = OnlineSecurity, y = tenure, fill = OnlineSecurity)) +
+  geom_boxplot(alpha = 0.5) +
+  facet_wrap(~ Contract) +
+  labs(title = "Tenure by Online Security and Contract Type") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Tenure by TechSupport and Contract
+ggplot(data, aes(x = TechSupport, y = tenure, fill = TechSupport)) +
+  geom_boxplot(alpha = 0.5) +
+  facet_wrap(~ Contract) +
+  labs(title = "Tenure by Tech Support and Contract Type") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
+#### Conclusion 
+- Both services again show almost identical faceted boxplot patterns (according to contract type):
+
+  - We see that, as expected, customers with longer contracts (One or Two year) tend to have higher tenure overall.
+  
+- Within each contract type:
+  - Customers with Online Security or Tech Support ("Yes") consistently show longer tenures compared to those without these services ("No") or without internet service.
+  
+  - The "No internet service" customers showed the lowest tenure across all contracts
+  
+**Outliers**  
+- We see many outliers, particularly in month-to-month contracts and in two year contracts:
+
+  - In two year contracts - this could suggest that some customers still terminate early, indicating variability in retention behavior even among those who committed to longer terms.
+  
+  - In shorter (month-to-month) contracts - this represents the opposite case: unexpectedly long tenures despite the lack of contractual obligation. These long-tenured outliers in month-to-month contracts may reflect high satisfaction for customers
+  
+**Notable observation:**
+
+- In the aggregated (non-faceted) box plots of tenure vs. services, it appeared that:
+customers with services > no internet service > customers with no services in terms of tenure.
+
+- However, in the faceted plots (broken down by contract type), the pattern changed to:
+customers with services > no services > no internet service.
+
+- This shift highlights that when we control for contract type, the impact of service usage on tenure becomes less significant.
+
+- Therefore, contract type (month-to-month, 1-year, 2-year) is a stronger driver of tenure than the presence or absence of internet or other services.
+
+
+```{r}
+# Tenure by OnlineSecurity and Contract
+ggplot(data, aes(x = OnlineSecurity, y = TotalCharges, fill = OnlineSecurity)) +
+  geom_boxplot(alpha = 0.5) +
+  facet_wrap(~ Contract) +
+  labs(title = "TotalCharges by Online Security and Contract Type") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Tenure by TechSupport and Contract
+ggplot(data, aes(x = TechSupport, y = TotalCharges, fill = TechSupport)) +
+  geom_boxplot(alpha = 0.5) +
+  facet_wrap(~ Contract) +
+  labs(title = "TotalCharges by Tech Support and Contract Type") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+#### Conclusion 
+- We see that both service (Online Security and Tech Support) plots show almost identical patterns again.
+- For Total Charges the initial (aggregated) and faceted box plots show the same consistent patterns across contract types. (yes > no > no service)
+  - This means that contract type does not confound the relationship between service  usage and Total Charges.
+  
+- Additionally we see that:
+  - For 1-year and 2-year contracts, Total Charges are almost the same for customers with and without the additional services.
+  - This suggests that contract length, and not the service usage, is the primary driver of total charges in these cases.
+  
+  - For month-to-month contracts, customers with the services have slightly higher Total Charges, possibly due to longer retention.
+
+
+### Combined Services and Contract Type Plot
+
+```{r}
+data$ServiceCombo <- interaction(data$OnlineSecurity, data$TechSupport)
+
+ggplot(data, aes(x = ServiceCombo, y = tenure, fill = ServiceCombo)) +
+  geom_boxplot(alpha = 0.7) +
+  facet_wrap(~ Contract) +
+  labs(title = "Tenure by Combined Services and Contract Type") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
+#### Conclusion 
+
+- The faceted plot shows that contract type plays a dominant role in determining customer tenure.
+
+  - In month-to-month contracts, service usage (especially presence of internet and security features) appears to influence tenure.
+    - Customers with more services tend to stay longer.
+
+  - In long-term contracts, customers stay longer regardless of service use — contract commitment outweighs service importance.
+
+
+```{r}
+ggplot(data, aes(x = ServiceCombo, y = TotalCharges, fill = ServiceCombo)) +
+  geom_boxplot(alpha = 0.7) +
+  facet_wrap(~ Contract) +
+  labs(title = "TotalCharges by Combined Services and Contract Type") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+#### Conclusion 
+
+- The consistent patterns across contract types indicate that the relationship between service usage and TotalCharges is not confounded by contract type.
+
+- In 1-year and 2-year contracts, TotalCharges are high and similar regardless of service combination — driven mostly by contract length and tenure.
+
+- In month-to-month contracts, service usage has a slight impact on TotalCharges, but still much less than contract duration.
+
+- This suggests that TotalCharges is mostly impacted by contract type and time spent with the company, while the effect of additional services is relatively small.
+
+
+
+### Overall Conclusion:
+
+- OnlineSecurity and TechSupport slightly increase tenure and TotalCharges for month-to-month customers.
+
+- For 1-year and 2-year contracts, these services have little to no effect — contract length drives tenure and spending.
+
+- Contract type is the most important factor influencing both how long customers stay and how much they spend.
+
+- The impact of services is only important in short-term contracts where customers have more flexibility to leave.
+
+
+&nbsp;
+
+---
+
+&nbsp;
+
+# Question 4:
+
+**What are the primary factors (e.g., combinations of services) that contribute most to high MonthlyCharges, and how do these factors relate to tenure and Churn behavior? Can we identify "premium" customer segments and their churn characteristics?**
+
+### What is needed: 
+- Which **combinations of services** lead to **high MonthlyCharges**?
+- Do customers with those combinations **stay longer or churn more**?
+- Can we define and understand a **"premium" segment** with high charges and churn risk?
+
+```{r}
+# Step 1: Find service combinations that contribute most to high MonthlyCharges
+
+# Select service-related columns
+service_cols <- c("OnlineSecurity", "OnlineBackup", "DeviceProtection", 
+                  "TechSupport", "StreamingTV", "StreamingMovies", "PhoneService")
+data$service_count <- rowSums(data[service_cols] == "Yes")  # Number of active services
+```
+
+```{r}
+# Replace "No internet service" and "No phone service" with "No" to simplify categories
+data <- data %>%
+  mutate(across(
+    all_of(service_cols),
+    ~ ifelse(. %in% c("No internet service", "No phone service"), "No", .)
+  ))
+```
+
+```{r}
+# Create a combined label showing all active services per customer
+data$ServiceCombo <- apply(data[service_cols], 1, function(row) {
+  active <- names(row)[row == "Yes"]
+  if (length(active) == 0) {
+    return("(No Add-ons)")
+  } else {
+    return(paste(active, collapse = " + "))
+  }
+})
+```
+
+### A. Average Monthly Charges by Service Combination
+
+```{r}
+# Calculate average monthly charges and count for each service combination
+combo_stats <- data %>%
+  group_by(ServiceCombo) %>%
+  summarise(
+    avg_charge = mean(MonthlyCharges, na.rm = TRUE),
+    count = n()
+  ) %>%
+  ungroup() %>%
+  filter(count >= 10) %>%  # Filter out rare combinations
+  arrange(desc(avg_charge)) %>%
+  slice_max(avg_charge, n = 15)
+
+# Reorder factor levels based on avg_charge for plotting
+combo_stats <- combo_stats %>%
+  mutate(ComboLabel = paste0(str_trunc(ServiceCombo, 45), " (", row_number(), ")")) %>%
+  mutate(ComboLabel = factor(ComboLabel, levels = ComboLabel[order(avg_charge)]))
+
+# Plot: Top 15 service combinations by average monthly charges
+ggplot(combo_stats, aes(x = ComboLabel, y = avg_charge)) +
+  geom_col(fill = "#5C6BC0") +
+  coord_flip() +
+  scale_y_continuous(labels = comma_format(accuracy = 1)) +
+  labs(
+    title = "Top 15 Service Combinations\nby Avg Monthly Charges",
+    x = "Service Combination (truncated)",
+    y = "Average Monthly Charges"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r full_combo_table, echo=FALSE}
+# Table of the same top 15 combos with full labels
+knitr::kable(combo_stats %>%
+  arrange(desc(avg_charge)) %>%   
+  select(ServiceCombo, avg_charge, count),
+  caption = "Top 15 Full Service Combinations with Avg Charges and Counts")
+```
+
+#### Conclusion: Average Monthly Charges by Combo
+- Service combinations with 5+ add-ons lead to the highest monthly charges.
+- Combos involving **StreamingTV**, **OnlineSecurity**, and **TechSupport** dominate top ranks.
+- Customers subscribing to these bundled services are likely to be heavy users.
+
+
+### B. Churn Rate for Top Combinations
+
+```{r combo_churn_tenure, message=FALSE, warning=FALSE}
+# Step 1: Use top 15 combos
+top_combos <- combo_stats$ServiceCombo
+
+# Step 2: Summarize churn and tenure for those combos
+combo_churn_df <- data %>%
+  filter(ServiceCombo %in% top_combos) %>%
+  group_by(ServiceCombo) %>%
+  summarise(
+    ChurnRate = mean(Churn == "Yes") * 100,
+    AvgTenure = mean(tenure),
+    Count = n()
+  ) %>%
+  ungroup()
+
+# Step 3: Join with truncated labels
+combo_churn_df <- left_join(combo_churn_df, combo_stats %>% 
+                               select(ServiceCombo, ComboLabel), by = "ServiceCombo")
+
+# Step 4: Plot churn rate
+ggplot(combo_churn_df, aes(x = reorder(ComboLabel, ChurnRate), y = ChurnRate)) +
+  geom_col(fill = "#EF5350") +
+  coord_flip() +
+  labs(title = "Churn Rate by\nTop Service Combinations",
+       x = "Service Combination (truncated)",
+       y = "Churn Rate (%)") +
+  theme_minimal(base_size = 12) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+#### Conclusion: Churn Rate by Combo
+- Some high-charge combos **also churn more frequently**.
+- Heavy churn in combos with **streaming but no support services**.
+- Lower churn in combos that include **TechSupport** and **OnlineSecurity**.
+
+### C. Average Tenure by Service Combination
+
+```{r combo_tenure_plot, echo=FALSE}
+# Plot average tenure by service combination
+
+ggplot(combo_churn_df, aes(x = reorder(ComboLabel, AvgTenure), y = AvgTenure)) +
+  geom_col(fill = "#42A5F5") +
+  coord_flip() +
+  labs(title = "Average Tenure\nby Top Service Combinations",
+       x = "Service Combination (truncated)",
+       y = "Average Tenure (months)") +
+  theme_minimal(base_size = 12) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+#### Conclusion: Average Tenure by Combo
+- Many high-charge customers have **short tenure** → indicating they **churn early**.
+- Some combinations show both **high charges and long tenure**, likely **loyal premium users**.
+- Significant variation in customer lifetime value across combos.
+
+```{r combo_churn_table, echo=FALSE}
+# Table: Churn and tenure summary for top combos
+knitr::kable(combo_churn_df %>% 
+               arrange(desc(ChurnRate)) %>%
+               select(ServiceCombo, ChurnRate, AvgTenure, Count),
+             caption = "Churn Rate and Avg Tenure by Top Service Combinations",
+             digits = 2)
+```
+
+
+### D. Identify Premium Customer Segments
+
+```{r identify_premium, echo=FALSE}
+# Tag "premium" customer segments
+
+# Step 1: Join avg_charge into combo_churn_df
+combo_churn_df <- left_join(combo_churn_df, combo_stats %>% 
+                               select(ServiceCombo, avg_charge), by = "ServiceCombo")
+
+# Step 2: Count number of services per combo
+combo_churn_df$ServiceCount <- sapply(strsplit(combo_churn_df$ServiceCombo, " \\+ "), length)
+
+# Step 3: Flag premium segments
+combo_churn_df <- combo_churn_df %>%
+  mutate(PremiumSegment = ifelse(avg_charge > 90 & ServiceCount >= 5, "Yes", "No"))
+```
+
+
+```{r premium_scatter_plot, echo=FALSE}
+ggplot(combo_churn_df, aes(x = avg_charge, y = ChurnRate, color = PremiumSegment)) +
+  geom_point(size = 4, alpha = 0.8) +
+  scale_color_manual(values = c("Yes" = "#EF5350", "No" = "#42A5F5")) +
+  labs(
+    title = "Churn Rate vs Avg Monthly Charges\nColored by Premium Segment",
+    x = "Average Monthly Charges",
+    y = "Churn Rate (%)",
+    color = "Premium"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+#### Conclusion: Scatter Plot of Premium Segments
+
+- **Premium Segments**
+  - Premium defined as **avg charge > $90** and **5+ services**.
+  - These segments have **high revenue potential** but also **shorter tenure** and **higher churn**.
+  - Their service usage and billing place them among the highest-value customers.
+  - These customers should be a **priority for retention** through loyalty or bundling offers.
+  
+---
+
+- **Premium combos (red)** mostly cluster in the **top-right**:
+  - High **MonthlyCharges**
+  - High **ChurnRate**
+- **Non-premium segments (blue)** are concentrated lower-left:
+  - Low cost, low churn — stable and low-risk
+- This clearly shows that **high revenue = high risk**, and **targeted retention** is needed for premium users.
+
+---
+
+### Overall Conclusion
+
+- **Service combinations** with 5+ active services — especially involving streaming and tech — have the **highest monthly charges**.
+- **Churn is not directly tied to charges** — some expensive combos churn less due to support features.
+- A clear segment of **premium customers** exists: they **pay most**, **churn quickly**, and **use multiple services**.
+- These users offer the **highest revenue opportunity**, but also **pose risk**.
+- **Retention strategies** (like onboarding support or loyalty perks) should focus on premium churn-prone groups.
+
+&nbsp;
+
+---
+
+&nbsp;
+
+
+
+# Question 05
+
+**Can we identify distinct customer segments based on service usage patterns, and how do these segments differ in churn, loyalty, and spending?**
+
+- The goal is to group customers into meaningful segments based on all the services they use such as phone, internet, security, streaming, etc.
+- Once we've grouped them (using clustering), we want to compare those groups to see:
+  - Which groups have higher or lower churn rates? (Who is more likely to leave?)
+  - Which groups are paying more or less each month? (Spending patterns)
+  - Which groups have been with the company longer or shorter? (Customer loyalty)
+
+
+
+### Quick Exploratory Plots to Understand Service Usage
+
+```{r}
+# Set of colors
+bar_colors <- c("skyblue", "tomato", "seagreen", "gold", "plum", "orange")
+hist_color <- "steelblue"
+
+# Barplots for categorical variables
+
+barplot(table(data$PhoneService), main = "Phone Service Distribution", col = bar_colors[1],
+        ylab = "Count")
+
+barplot(table(data$MultipleLines), main = "Multiple Lines Distribution", col = bar_colors[2],
+        ylab = "Count")
+
+barplot(table(data$InternetService), main = "Internet Service Distribution", col = bar_colors[3],
+        ylab = "Count")
+
+barplot(table(data$OnlineSecurity), main = "Online Security", col = bar_colors[4], ylab = "Count")
+
+barplot(table(data$StreamingTV), main = "Streaming TV", col = bar_colors[5], ylab = "Count")
+
+barplot(table(data$Churn), main = "Churn Distribution", col = bar_colors[6], ylab = "Count")
+
+
+# Histograms for numeric variables
+
+hist(data$MonthlyCharges, main = "Monthly Charges", xlab = "€", col = hist_color, border = "white")
+
+hist(data$tenure, main = "Tenure", xlab = "Months", col = hist_color, border = "white")
+
+```
+
+
+
+
+#### Conclusion 
+
+- **Bar Plots** (Service Usage Distributions)
+  - Phone Service Distribution: Most customers have phone service.
+
+  - Multiple Lines Distribution: Among those with phone service, many have multiple lines, but a significant portion do not.
+
+  - Internet Service Distribution: Most customers use either DSL or Fiber optic, with a smaller group having no internet service.
+
+  - Online Security & Streaming TV Distribution: Large number of customers do not have these add-on services, though some do.
+
+- **Histograms** (Churn, Monthly Charges, and Tenure)
+  - Churn: There's a noticeable portion of customers who have churned, but the majority have stayed.
+
+  - Monthly Charges: The distribution is right-skewed; most customers pay between €20 and €80, with fewer paying higher amounts.
+
+  - Tenure: Many customers have low to mid-range tenure (less than 40 months), indicating a mix of new and long-term users.
+
+
+
+
+```{r}
+service_vars <- c("PhoneService", "MultipleLines", "InternetService", "OnlineSecurity", 
+                  "OnlineBackup", "DeviceProtection", "TechSupport", 
+                  "StreamingTV", "StreamingMovies")
+
+
+data[service_vars] <- lapply(data[service_vars], as.factor)
+
+# One-hot encode service usage features while preserving “No phone/internet service”
+
+dummies <- dummyVars(~ ., data = data[, service_vars])
+encoded_services <- predict(dummies, newdata = data[, service_vars])
+encoded_services <- as.data.frame(encoded_services)
+
+# Scale the encoded service data
+
+cluster_scaled <- scale(encoded_services)
+
+
+```
+
+
+
+#### Conclusion: Service Usage Features for Clustering
+
+- The service-related columns ( PhoneService, MultipleLines, InternetService, OnlineSecurity, OnlineBackup, DeviceProtection, TechSupport, StreamingTV, StreamingMovies ) were **converted to categorical factors** to prepare them for encoding.
+
+- These categorical variables were then **one-hot encoded**, meaning each service level (like "Yes", "No", "No internet service") was turned into a separate binary column. 
+
+- Finally, the encoded data was **standardized (scaled)** to ensure all features contribute equally during clustering, regardless of their original range or frequency.
+
+
+
+```{r}
+# Find optimal K using Elbow Method
+wss <- numeric()
+for (k in 1:10) {
+  set.seed(42)
+  km <- kmeans(cluster_scaled, centers = k, nstart = 10)
+  wss[k] <- km$tot.withinss
+}
+
+plot(1:10, wss, type = "b", pch = 19, frame = FALSE,
+     xlab = "Number of clusters K",
+     ylab = "Total within-cluster sum of squares",
+     main = "Elbow Method for Optimal K")
+
+```
+
+
+#### Conclusion: Elbow Method for Optimal K
+
+- The code runs the K-means algorithm for different values of K (from 1 to 10) and calculates the **within-cluster sum of squares (WSS)** for each. These values are then plotted to create the elbow plot.
+
+- The elbow plot helps us choose the ideal number of customer groups (clusters). As we increase the number of clusters from 1 to 4, the model becomes much better at grouping similar customers (WSS drops sharply). After 4, the improvement slows down, meaning extra clusters don’t add much value.
+
+- **K = 4** is the best number of groups because after that, adding more groups doesn't improve the results much.
+
+
+
+
+
+```{r}
+# Apply K-means clustering (k = 4 from above elbow method)
+set.seed(123)
+k <- 4
+kmeans_result <- kmeans(cluster_scaled, centers = k, nstart = 25)
+data$Cluster <- as.factor(kmeans_result$cluster)
+
+```
+
+
+#### Conclusion: K-Means Clustering
+
+- We applied K-means clustering to group customers into distinct segments based on their scaled service-related features.
+
+- Using the elbow method, we selected **k = 4** clusters as the optimal number of groups to balance cluster compactness
+
+- The K-means algorithm was run with 25 different random initializations (**nstart = 25**) to improve the chance of finding a stable and optimal clustering solution.
+
+- Each customer was assigned to one of the 4 clusters, and the cluster labels were added as a new categorical variable Cluster in the dataset for further analysis and visualization.
+
+
+
+
+
+
+```{r}
+# Churn Rate per Cluster
+
+ggplot(data, aes(x = Cluster, fill = Churn)) +
+  geom_bar(position = "fill") +
+  labs(title = "Churn Rate by Cluster", y = "Proportion")
+
+
+```
+
+
+#### Conclusion: Compare clusters using Churn
+
+- The stacked bar plot shows the proportion of customers who churned (**Yes**) versus those who stayed (**No**) within each of the four clusters identified by K-means clustering.
+  
+  - **Cluster 4** has the lowest churn rate, with only a small fraction of customers leaving. This suggests that customers in this segment are generally more loyal or satisfied.
+  
+  - **Cluster 1** has the highest churn rate, with nearly 40-45% of customers having churned. This cluster might represent a higher-risk group, so we should focus on keeping them..
+  
+  - **Clusters 2 and 3** have similar churn rates, each with about 25% of customers churning.
+  
+Overall, the plot reveals distinct differences in churn behavior across the segments, indicating the clustering captured meaningful variation in customer retention patterns.
+
+
+
+
+```{r}
+# Monthly Charges per Cluster
+ggplot(data, aes(x = Cluster, y = MonthlyCharges, fill = Cluster)) +
+  geom_boxplot() +
+  labs(title = "Monthly Charges by Cluster", y = "€")
+
+
+```
+
+
+#### Conclusion: Compare clusters using Monthly Charges
+
+- The boxplot shows how average monthly charges differ across the four customer segments (clusters) obtained via K-means clustering.
+
+  - **Cluster 4**: These customers **pay the most each month**, which means they probably use many extra services like streaming, tech support, or device protection. They are very valuable to the company.
+  
+  - **Cluster 2**: Customers in this cluster **pay very low monthly charges** with almost no variation, indicating they likely use only basic services or possibly no internet/phone services. They are low-engagement, cost-conscious users.
+
+  - **Cluster 3**: These customers have **mid-range charges**, suggesting a selective service adoption (maybe phone + internet but no extras). They may be good targets for upselling additional services.
+  
+  - **Cluster 1**: These customers **pay a medium to high amount each month**, but the amounts vary a lot. They probably use different combinations of services, and their needs aren’t all the same. They could be growing or changing customers, so it's good to understand them better.
+
+Overall, clustering successfully revealed distinct customer segments with clear differences in spending behavior.
+
+
+
+
+
+
+```{r}
+# Tenure per Cluster
+ggplot(data, aes(x = Cluster, y = tenure, fill = Cluster)) +
+  geom_boxplot() +
+  labs(title = "Tenure by Cluster", y = "Months")
+
+```
+
+#### Conclusion: Compare clusters using Tenure
+
+- The boxplot shows how long customers in each cluster have been with the company (tenure in months).
+
+  - **Cluster 1**: Customers in this cluster have the **highest tenure**, with most staying for over 50 months. This suggests they've been with the company for many years, likely because they're satisfied with their services. They may also be on long-term contracts and are **less likely to churn**.
+  
+  - **Cluster 2**: Tenure values in this cluster vary a lot, with a moderate median (around 25–30 months). This means the group include **both new and long-term customers**. Their behavior might be influenced by specific service types or contract flexibility.
+  
+  - **Cluster 3**: This group has been with the company for **about 30–35 months on average**, with a fairly wide range. They're not brand-new, but they also haven't stayed as long as Cluster 1. They might still be evaluating their satisfaction with the service.
+  
+  - **Cluster 4**: This cluster has the **lowest tenure**, with many customers being with the company for less than a year. These are likely new users, or customers who might leave soon if their needs aren't met.
+
+  
+This distribution helps understand customer lifespan within each segment and can guide retention strategies.
+
+
+
+
+
+
+
+```{r}
+pca_result <- prcomp(cluster_scaled, center = TRUE, scale. = TRUE)
+
+table(data$Cluster)
+
+summary(pca_result)
+
+# Convert PCA result into a data frame
+pca_data <- as.data.frame(pca_result$x)
+# Add cluster info to PCA data
+pca_data$Cluster <- data$Cluster
+
+# Basic ggplot scatter plot
+ggplot(pca_data, aes(x = PC1, y = PC2, color = Cluster)) +
+  geom_point(alpha = 0.7) +
+  labs(title = "PCA - Customers Colored by Cluster", x = "PC1", y = "PC2") +
+  theme_minimal()
+```
+
+#### Conclusion 
+
+
+**Cluster Sizes**
+
+This tells you how many customers are in each cluster.
+
+- **Cluster 1** with 2,014 customers and is the Largest group (many long-term, high-paying users).
+- **Cluster 2** with 2,924 customers and is the	Smaller, very distinct group likely low-paying, basic users.
+- **Cluster 3** with 680 customers and is the	Smallest group (moderate users).
+- **Cluster 4** with 1,414 customers and is the second largest group (newer customers with medium spending).
+
+
+**Principal Component Analysis (PCA)**
+
+
+**PCA Results**
+
+- The **summary** shows how much information (variance) each Principal Component (PC) captures from the original dataset.
+
+- PC1 (First Principal Component) captures 37.9% of the total information (variance).
+
+- PC2 adds 14.3%.
+
+- The first few principal components capture most of the information in the dataset. Just the first two (PC1 and PC2) together explain over 52% of the variance, making them suitable for visualizing customer clusters in 2D.
+
+
+**What the Plot Shows**:
+
+- This plot visualizes the customers in a 2D space using Principal Component Analysis (PCA), which reduces the original variables (service features, charges, tenure, etc.) into two principal components (PC1 and PC2). 
+
+  - **Cluster 1 and 4**:
+      - These two clusters overlap slightly in PCA space.
+      - This suggests they may share some similar service features (e.g., both might use many services), but differ in other variables (like tenure or monthly charges).
+      
+  - **Cluster 2**:
+      - Contains very few points, positioned far from other clusters, on the right-hand side of the plot.
+      - This means these customers are very different from the rest based on their service usage and characteristics.
+      - Likely a group of basic users or outliers (e.g., only phone service, very low charges).
+      
+  - **Cluster 3**:
+      - Well separated in the bottom-left region.
+      - Indicates these customers are distinct from Clusters 1 and 4 and possibly have a consistent service pattern (e.g., moderate services, moderate charges).
+      
+Overall, the PCA plot confirms that the clusters represent distinct customer groups with meaningful differences in behavior and service usage.
+
+
+
+
+
+
+```{r}
+
+data %>%
+  group_by(Cluster) %>%
+  summarise(
+    Avg_Churn = mean(as.numeric(Churn == "Yes")),
+    Avg_MonthlyCharges = mean(MonthlyCharges),
+    Avg_Tenure = mean(tenure),
+    Count = n()
+  )
+
+```
+
+
+
+### Overall Conclusion
+
+**Linking Customer Segments to Churn, Spending, and Tenure**
+
+- **Cluster 2** has the lowest churn rate (7.4%) and the lowest spending, suggesting stable, basic service users who are less likely to leave.
+
+- **Cluster 4** has the highest churn rate (39.9%), with moderate charges but very low tenure, indicating newer, at risk customers.
+
+- **Cluster 1** includes high-paying, long-term customers with moderate churn (25%) likely premium users who are mostly loyal.
+
+- **Cluster 3** has moderate spending and tenure with a churn rate similar to Cluster 1, representing a mid-range, possibly undecided segment.
+
+&nbsp;
+
+---
+
+&nbsp;
+
+
+
+# Final Project Conclusion
+
+In this project, we looked at the customer data to understand why some customers leave (churn) while others stay. Here’s what we found:
+
+  - **Contracts and Demographics**: Customers with longer contracts (like one or two years) are less likely to leave. People who are older or don’t have a partner or dependents are slightly more likely to leave, especially if they have a month-to-month contract.
+
+  - **Tenure and Services**: People who stay longer often use more services and have longer contracts. Services like Online Security and Tech Support are common among loyal customers.
+
+  - **Support Services Help**: Having Online Security and Tech Support seems to help customers stay longer and spend a bit more—especially for those not on short contracts. This shows that support services work best when combined with long-term plans.
+
+  - **Spending and Service Bundles**: Customers who buy multiple services (like streaming, tech support, and security) usually pay more each month. But this doesn’t always mean they stay longer. So, it's important to keep these high-paying customers happy to avoid losing them.
+
+  - **Customer Groups**: When we grouped customers based on their service usage, we found clear patterns. For example, one group with short contracts and few services had a high chance of leaving, while another group with full service bundles and long contracts stayed longer and brought in more money.
+
+In short, the most important factors for reducing churn are contract type, how long someone has been a customer, and whether they use support services. The company can reduce churn by offering better support, bundling services at a discount, and encouraging customers to switch to longer contracts.
+
+
+&nbsp;
+
+---
+
+&nbsp;
+
+
+# References:
+
+- Kaggle. (n.d.). Telco Customer Churn. https://www.kaggle.com/datasets/blastchar/telco-customer-churn
+
+- Antoine Soetewy (2020): 
+https://statsandr.com/blog/graphics-in-r-with-ggplot2/
+
+
+
+
